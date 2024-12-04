@@ -1,63 +1,85 @@
-import fs from 'fs';
-import path from 'path';
-import { PDFDocument, PDFPage, rgb, StandardFonts } from 'pdf-lib';
-import { Content, isImageContent, isTextContent } from './PDFContent';
+import * as fs from 'fs';
 
-export default async function createPDF(filePath: string) {
-    const pdfDoc = await PDFDocument.create();
+export default class PDFGenerator {
+    private content: string = '';
 
-    await createFirstPage(pdfDoc);
-    await createSecondPage(pdfDoc);
+    // Add HTML-like content
+    addContent(htmlContent: string): this {
+        const processedContent = this.processHTMLContent(htmlContent);
+        this.content += processedContent + '\n';
+        return this;
+    }
 
-    await save(filePath, pdfDoc);
-}
+    // Basic HTML-like content processing
+    private processHTMLContent(html: string): string {
+        return html
+            .replace(/<a href="(.*?)">(.*?)<\/a>/g, 'Link: $2 ($1)')
+            .replace(/<h1>(.*?)<\/h1>/g, '>>> $1 <<<')
+            .replace(/<h2>(.*?)<\/h2>/g, '>> $1 <<')
+            .replace(/<p>(.*?)<\/p>/g, '$1')
+            .replace(/<strong>(.*?)<\/strong>/g, '**$1**')
+            .replace(/<em>(.*?)<\/em>/g, '*$1*')
+            .replace(/<u>(.*?)<\/u>/g, '_$1_')
+            .replace(/<img src="(.*?)" alt="(.*?)" \/>/g, '[Image: $2 at $1]')
+            .replace(/<[^>]*>/g, ''); // Remove any remaining tags
+    }
 
-async function createFirstPage(pdfDoc: PDFDocument) {
-    const page = pdfDoc.addPage();
-    await addPageContent('Subscribe to the channel', page, pdfDoc);
-}
+    // Generate PDF content
+    generate(filePath: string): void {
+        const pdfContent = this.createPDFContent(this.content);
+        fs.writeFileSync(filePath, pdfContent);
+        console.log(`PDF generated at ${filePath}`);
+    }
 
-async function createSecondPage(pdfDoc: PDFDocument) {
-    const page = pdfDoc.addPage();
-    const imagePath = path.join(__dirname, '..', '..', 'images', 'channel.png');
-    const imageBuffer = fs.readFileSync(imagePath);
-    await addPageContent(imageBuffer, page, pdfDoc);
-}
+    // Create basic PDF structure
+    private createPDFContent(content: string): Buffer {
+        const header = '%PDF-1.4\n';
+        const body = this.createPDFBody(content);
+        const trailer = this.createPDFTrailer();
 
-async function addPageContent(content: Content, page: PDFPage, pdfDoc: PDFDocument) {
-    if(isTextContent(content)) {
-        addText(content, page, pdfDoc);
-    } else if(isImageContent(content)) {
-        addImage(content, page, pdfDoc);
+        return Buffer.from(header + body + trailer, 'utf-8');
+    }
+
+    // Create PDF body with text content
+    private createPDFBody(content: string): string {
+        const escapedContent = this.escapeSpecialChars(content);
+        return '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n' +
+            '2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n' +
+            '3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>\nendobj\n' +
+            '4 0 obj\n<< /Length ' + (escapedContent.length + 44) + ' >>\nstream\n' +
+            `BT /F1 24 Tf 100 700 Td (${escapedContent}) Tj ET\n` +
+            'endstream\nendobj\n' +
+            '5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n';
+    }
+
+    // Create PDF trailer
+    private createPDFTrailer(): string {
+        return 'xref\n0 6\n0000000000 65535 f \n0000000010 00000 n \n0000000053 00000 n \n0000000100 00000 n \n0000000173 00000 n \n0000000221 00000 n \n' +
+            'trailer\n<< /Root 1 0 R /Size 6 >>\nstartxref\n278\n%%EOF';
+    }
+
+    // Escape special PDF characters
+    private escapeSpecialChars(text: string): string {
+        return text
+            .replace(/\\/g, '\\\\')
+            .replace(/\(/g, '\\(')
+            .replace(/\)/g, '\\)')
+            .replace(/\n/g, '\\n');
     }
 }
 
-async function addImage(content: Buffer, page: PDFPage, pdfDoc: PDFDocument) {
-    const embeddedImage = await pdfDoc.embedPng(content);
-    const imageDimension = embeddedImage.scale(0.7);
-    page.drawImage(embeddedImage, {
-        x: page.getWidth() / 2 - imageDimension.width / 2,
-        y: page.getHeight() / 2 - imageDimension.height / 2,
-        width: imageDimension.width,
-        height: imageDimension.height
-    });
+// Example usage
+async function example() {
+    const pdfGenerator = new PDFGenerator();
+
+    pdfGenerator
+        .addContent('<div style="color: red;">This is a sample text with HTML tags.</div>')
+        .addContent('<h1>Welcome to My PDF</h1>')
+        .addContent('<p>This is a sample paragraph with <strong>bold</strong> and <em>italic</em> text.</p>')
+        .addContent('<a href="https://example.com">Visit Example</a>')
+        .addContent('<img src="https://example.com/image.jpg" alt="Sample Image" />')
+        .generate('./output.pdf');
 }
 
-async function addText(text: string, page: PDFPage, pdfDoc: PDFDocument) {
-    const timesRomanFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
-    const fontSize = 30;
-    const { height } = page.getSize();
-    const textWidth = timesRomanFont.widthOfTextAtSize(text, fontSize);
-    page.drawText(text, {
-        x: page.getWidth() / 2 - textWidth / 2,
-        y: height - 4 * fontSize,
-        size: fontSize,
-        font: timesRomanFont,
-        color: rgb(0, 0.53, 0.71)
-    });
-}
-
-async function save(filePath: string, pdfDoc: PDFDocument) {
-    const pdfBytes = await pdfDoc.save();
-    fs.writeFileSync(filePath, pdfBytes);
-}
+// Run the example
+example();
